@@ -13,19 +13,51 @@ Lukasz Krawczyk 109***
 #include <pthread.h>
 #include <stdio.h>
 
-#define NUM_THREADS     5
+#define NUM_THREADS 5
 #define HOBO_INDEX 0
 #define NURSE_INDEX 1
 #define ACCESS_GRANTED 0
 #define ACCESS_DENIED 1
 
-void *PrintHello(void *threadid)
-{
-	int a = *((int *) threadid);
+/*Data needed to comunicate: senderID - rank of thread's parent process,
+receiverID - id of hobo to comunicate with,
+response - code of response
+in future it will be also timer to trac comunications in program*/
+struct ThreadData {
+	int senderID;
+	int receiverID;
+	int response;
+};
+typedef struct ThreadData ThreadData;
 
-	printf("Hello World! It's me, thread! ARG= %d\n", a);
+/*Comunication between two hobos*/
+void comunication(void *inOutParameter) {
+	ThreadData comunicationData = *((ThreadData*) inOutParameter);
+	/*Split to two roles*/
+	// if (fork()) {
+	// 	/*It's receiver. This role is wait for request for access for it's destination hobo*/
+	
+	// } else {
+	// 	/*It's sender. This role is sending request for access for it's hobo - parent process*/
+
+	// }
+	printf("Inside: %d \n", comunicationData.senderID);
+	pthread_exit(NULL);
+}
+
+void *sendAccessRequest(void *inOutParameter)
+{/*
+	int hoboToAskId = *((int *) inOutParameter);
+
+	MPI_Send(
+	    void* data,
+	    int count,
+	    MPI_Datatype datatype,
+	    int destination,
+	    int tag,
+	    MPI_Comm communicator);
 	int *add = (int *) threadid;
-	*add = 0;
+	*add = 0;*/
 	pthread_exit(NULL);
 }
 
@@ -64,31 +96,38 @@ void createRole(int rank, int* roles_count) {
 
 /*This function will be executed by Hobos processes*/
 int hobo_live(int rank, int hobos_count) {
+	/*Variable to indexing*/
+	int hobo_index;
+	
 	/*Table of threads. Each thread to ask another hobo asynchronymus*/
 	pthread_t threads[hobos_count];
-	/*Array to keep responses*/
-	int responses[hobos_count] = {ACCESS_DENIED};
+
+	/*Table with data to comunication for this hobo to all hobos*/
+	ThreadData communication_data[hobos_count];
+
 	/*Allow access to myself by myself*/
-	responses[rank] = ACCESS_GRANTED;
+	communication_data[rank].response = ACCESS_GRANTED;
 
 	/*For each hobo...*/
-	for (hobo_index = 0; t < hobos_count; hobo_index++) {
+	for (hobo_index = 0; hobo_index < hobos_count; hobo_index++) {
 		/*It's myself, go to next hobo*/
 		if (hobo_index == rank)
 			continue;
 
-		/*Set response field to id of hobo*/
-		responses[hobo_index] = hobo_index
+		/*initialize each struct with rank as sender and ACCESS_DENIED as response*/
+		communication_data[hobo_index].response = ACCESS_DENIED;
+		communication_data[hobo_index].senderID = rank;
+
 		/*Create thread to ask another hobo for place. Set fuction to run by new thread: PrintHello
 		and send place for response: address of response[t]. Check if creating is finish with success: return code == 0,
 		if not fail program*/
-		if (pthread_create(&threads[hobo_index], NULL, PrintHello, &responses[hobo_index]); != 0)
+		if ( pthread_create(&threads[hobo_index], NULL, comunication, (void*) &communication_data[hobo_index]) != 0)
 			exit(-1);
 	}
 	/*After you run all threads to asking hobos about access check responses.
 	Set counter to 0 if you see someone is not allowing you to enter*/
-	for (hobo_index = 0; t < hobos_count; hobo_index++)
-		if (responses[hobo_index] != ACCESS_GRANTED)
+	for (hobo_index = 0; hobo_index < hobos_count; hobo_index++)
+		if (communication_data[hobo_index].response != ACCESS_GRANTED)
 			hobo_index = 0;
 
 	printf("I'm in! \n");
