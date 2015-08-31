@@ -25,26 +25,48 @@ struct ThreadData {
 	int senderID;
 	int receiverID;
 	int response;
+	int timer;
 };
 typedef struct ThreadData ThreadData;
 
 /*Comunication between two hobos*/
-void comunication(void *inOutParameter) {
+void *comunication(void *inOutParameter) {
 	ThreadData comunicationData = *((ThreadData*) inOutParameter);
+
+	pthread_t send_request, response_for_request;
+
+
+
+	if ( pthread_create(&send_request, NULL, comunication, (void*) &communication_data[hobo_index]) != 0)
+			exit(-1);
 	/*Split to two roles*/
 	// if (fork()) {
 	// 	/*It's receiver. This role is wait for request for access for it's destination hobo*/
-	
+
 	// } else {
 	// 	/*It's sender. This role is sending request for access for it's hobo - parent process*/
 
 	// }
-	printf("Inside: %d \n", comunicationData.senderID);
+	if(comunicationData.senderID > comunicationData.receiverID){
+		/*Send request and wait for response*/
+		int send_result = MPI_Send(&comunicationData.senderID, 1, MPI_INT, comunicationData.receiverID, 0, MPI_COMM_WORLD);
+		int recv_result = MPI_Recv(&comunicationData.response, 1, MPI_INT, comunicationData.receiverID, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+		printf("Comunication: From %d to %d RESPONSE: %d \n", comunicationData.senderID, comunicationData.receiverID, comunicationData.response);	
+	}else{
+		/*Wait for request and send response*/
+		int response = 900;
+		int recv_result = MPI_Recv(&comunicationData.response, 1, MPI_INT, comunicationData.receiverID, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+		if(comunicationData.receiverID % 3)
+			response = 14;
+		int send_result = MPI_Send(&response, 1, MPI_INT, comunicationData.receiverID, 0, MPI_COMM_WORLD);
+	}
 	pthread_exit(NULL);
 }
 
 void *sendAccessRequest(void *inOutParameter)
-{/*
+{	/*
 	int hoboToAskId = *((int *) inOutParameter);
 
 	MPI_Send(
@@ -96,7 +118,7 @@ void createRole(int rank, int* roles_count) {
 int hobo_live(int rank, int hobos_count) {
 	/*Variable to indexing*/
 	int hobo_index;
-	
+
 	/*Table of threads. Each thread to ask another hobo asynchronymus*/
 	pthread_t threads[hobos_count];
 
@@ -115,7 +137,7 @@ int hobo_live(int rank, int hobos_count) {
 		/*initialize each struct with rank as sender and ACCESS_DENIED as response*/
 		communication_data[hobo_index].response = ACCESS_DENIED;
 		communication_data[hobo_index].senderID = rank;
-
+		communication_data[hobo_index].receiverID = hobo_index;
 		/*Create thread to ask another hobo for place. Set fuction to run by new thread: PrintHello
 		and send place for response: address of response[t]. Check if creating is finish with success: return code == 0,
 		if not fail program*/
@@ -129,21 +151,6 @@ int hobo_live(int rank, int hobos_count) {
 			hobo_index = 0;
 
 	printf("I'm in! \n");
-
-	// for (t = 0; t < NUM_THREADS; t++)
-	// 	printf("All zeros! t= %d \t arg[t] = %d\n", t, arg[t]);
-
-
-
-	// if (fork()) { //try enter
-	// 	int hobo_id;
-	// 	//for(hobo_id = 0; hobo_id < hobos_count; hobo_id++)
-	// 	//	if(hobo_id != rank)
-	// 	//	MPI_Bcast(&msg, 1, MPI_FLOAT, 0, MPI_COMM_WORLD);
-	// 	//printf("Otrzymano msg = %d na procesie o id = %d\n", msg, rank);
-	// } else { //send a response to the others
-	// 	//MPI_Bcast(&msg, 1, MPI_FLOAT, rank, MPI_COMM_WORLD);
-	// }
 }
 
 /*This function will be executed by Nurses processes*/
