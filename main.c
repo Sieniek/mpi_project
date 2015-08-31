@@ -1,4 +1,3 @@
-
 /*****************************
 Projekt z Przetwarzania Rozproszonego:
 	>>Menelatorium<<
@@ -13,7 +12,6 @@ Lukasz Krawczyk 109***
 #include <pthread.h>
 #include <stdio.h>
 
-#define NUM_THREADS 5
 #define HOBO_INDEX 0
 #define NURSE_INDEX 1
 #define ACCESS_GRANTED 0
