@@ -16,70 +16,7 @@ Lukasz Krawczyk 109***
 #define NURSE_INDEX 1
 #define ACCESS_GRANTED 0
 #define ACCESS_DENIED 1
-
-/*Data needed to comunicate: senderID - rank of thread's parent process,
-receiverID - id of hobo to comunicate with,
-response - code of response
-in future it will be also timer to trac comunications in program*/
-struct ThreadData {
-	int senderID;
-	int receiverID;
-	int response;
-	int timer;
-};
-typedef struct ThreadData ThreadData;
-
-/*Comunication between two hobos*/
-void *comunication(void *inOutParameter) {
-	ThreadData comunicationData = *((ThreadData*) inOutParameter);
-
-	pthread_t send_request, response_for_request;
-
-
-
-	if ( pthread_create(&send_request, NULL, comunication, (void*) &communication_data[hobo_index]) != 0)
-			exit(-1);
-	/*Split to two roles*/
-	// if (fork()) {
-	// 	/*It's receiver. This role is wait for request for access for it's destination hobo*/
-
-	// } else {
-	// 	/*It's sender. This role is sending request for access for it's hobo - parent process*/
-
-	// }
-	if(comunicationData.senderID > comunicationData.receiverID){
-		/*Send request and wait for response*/
-		int send_result = MPI_Send(&comunicationData.senderID, 1, MPI_INT, comunicationData.receiverID, 0, MPI_COMM_WORLD);
-		int recv_result = MPI_Recv(&comunicationData.response, 1, MPI_INT, comunicationData.receiverID, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-		printf("Comunication: From %d to %d RESPONSE: %d \n", comunicationData.senderID, comunicationData.receiverID, comunicationData.response);	
-	}else{
-		/*Wait for request and send response*/
-		int response = 900;
-		int recv_result = MPI_Recv(&comunicationData.response, 1, MPI_INT, comunicationData.receiverID, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-		if(comunicationData.receiverID % 3)
-			response = 14;
-		int send_result = MPI_Send(&response, 1, MPI_INT, comunicationData.receiverID, 0, MPI_COMM_WORLD);
-	}
-	pthread_exit(NULL);
-}
-
-void *sendAccessRequest(void *inOutParameter)
-{	/*
-	int hoboToAskId = *((int *) inOutParameter);
-
-	MPI_Send(
-	    void* data,
-	    int count,
-	    MPI_Datatype datatype,
-	    int destination,
-	    int tag,
-	    MPI_Comm communicator);
-	int *add = (int *) threadid;
-	*add = 0;*/
-	pthread_exit(NULL);
-}
+#define ACCESS_REQUEST 9
 
 int* parseInputValues(int argc, char** argv) {
 	static int returned_values[2];
@@ -100,10 +37,17 @@ int* parseInputValues(int argc, char** argv) {
 
 /*Set process to different roles*/
 void createRole(int rank, int* roles_count) {
+
+
+	MPI_Comm hobo_comm, nurse_comm;
+	MPI_Comm_split(MPI_COMM_WORLD, rank < roles_count[HOBO_INDEX], 0, &hobo_comm);
+	MPI_Comm_split(MPI_COMM_WORLD, rank <  roles_count[HOBO_INDEX] + roles_count[NURSE_INDEX], 0, &nurse_comm);
+
+
 	if (rank < roles_count[HOBO_INDEX]) {
 		/*Hobo*/
-		printf("I will be hobo in future! :D \n");
-		hobo_live(rank, roles_count[HOBO_INDEX]);
+		printf("I will be hobo in future! :D %d \n", roles_count[HOBO_INDEX]);
+		hobo_live(rank, roles_count[HOBO_INDEX], hobo_comm);
 	} else if (rank < roles_count[HOBO_INDEX] + roles_count[NURSE_INDEX]) {
 		/*Nurse*/
 		printf("I will be nurse in future. :| \n");
@@ -114,43 +58,45 @@ void createRole(int rank, int* roles_count) {
 	}
 }
 
+int update_lamport(int local_time, int message_time){
+	return local_time > message_time ? local_time : message_time;
+}
+
 /*This function will be executed by Hobos processes*/
-int hobo_live(int rank, int hobos_count) {
-	/*Variable to indexing*/
-	int hobo_index;
+int hobo_live(int rank, int hobos_count, MPI_Comm my_comm) {
 
-	/*Table of threads. Each thread to ask another hobo asynchronymus*/
-	pthread_t threads[hobos_count];
+	int lamport;
+	int message[2] = {ACCESS_REQUEST, lamport};
+	int get_message[2];
+	int recv_buff[hobos_count], index;
 
-	/*Table with data to comunication for this hobo to all hobos*/
-	ThreadData communication_data[hobos_count];
+	/*Allgather will send request to all and gather others requests*/
+	MPI_Allgather(&message, 1, MPI_INT, recv_buff, 1, MPI_INT, my_comm);
 
-	/*Allow access to myself by myself*/
-	communication_data[rank].response = ACCESS_GRANTED;
+	/*Send verdict to all accepted and rejected hobos
+	Message is different for hobos, so we can't use Bcast since it use one message,
+	using Scatter/Gather/Alltoall will be not optimal since other hobos aren't intrested
+	of status rest of hobos*/
 
-	/*For each hobo...*/
-	for (hobo_index = 0; hobo_index < hobos_count; hobo_index++) {
-		/*It's myself, go to next hobo*/
-		if (hobo_index == rank)
-			continue;
+	/*I can remove some communicatio here: it's because if A hobo will have to send ACCESS_GRANTED status
+	to B process and B process will be not waiting for responses from C,D,... processes since we are assuming
+	this responses will be tha same, only A process must to send response to B, then B can send status to C and so on,
+	n-process will send status to A*/
 
-		/*initialize each struct with rank as sender and ACCESS_DENIED as response*/
-		communication_data[hobo_index].response = ACCESS_DENIED;
-		communication_data[hobo_index].senderID = rank;
-		communication_data[hobo_index].receiverID = hobo_index;
-		/*Create thread to ask another hobo for place. Set fuction to run by new thread: PrintHello
-		and send place for response: address of response[t]. Check if creating is finish with success: return code == 0,
-		if not fail program*/
-		if ( pthread_create(&threads[hobo_index], NULL, comunication, (void*) &communication_data[hobo_index]) != 0)
-			exit(-1);
+	index = rank + 1;
+	message[0] = index < 5 ? ACCESS_GRANTED : ACCESS_DENIED;
+
+	if (index == hobos_count)
+		index = 0;
+	/*For 0 process it will be seperate implementation since it will connect all in "chain"*/
+	if (rank == 0) {
+		MPI_Send(&message, 2, MPI_INT, index, 0, my_comm);
+		MPI_Recv(&get_message, 2, MPI_INT, hobos_count - 1, 0, my_comm, MPI_STATUS_IGNORE);
+	} else {
+		MPI_Recv(&get_message, 2, MPI_INT, rank - 1, 0, my_comm, MPI_STATUS_IGNORE);
+		MPI_Send(&message, 2, MPI_INT, index, 0, my_comm);
 	}
-	/*After you run all threads to asking hobos about access check responses.
-	Set counter to 0 if you see someone is not allowing you to enter*/
-	for (hobo_index = 0; hobo_index < hobos_count; hobo_index++)
-		if (communication_data[hobo_index].response != ACCESS_GRANTED)
-			hobo_index = 0;
-
-	printf("I'm in! \n");
+	printf("Process no. \t %d Status: \t %d\n", rank, get_message[0]);
 }
 
 /*This function will be executed by Nurses processes*/
@@ -160,14 +106,11 @@ int nurse_live() {
 
 int main(int argc, char **argv)
 {
-
 	int size, rank, len;
 	char processor[100];
-	int msg = 4;
-
-	/*This is local timer value of Lamport's timer*/
-	int lamport = 0;
-
+	MPI_Comm hobo_world, nurse_world;
+	MPI_Group hobo_group, nurse_group;
+	
 	MPI_Init(&argc, &argv);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -178,5 +121,3 @@ int main(int argc, char **argv)
 	MPI_Finalize();
 	pthread_exit(NULL);
 }
-
-
