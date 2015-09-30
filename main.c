@@ -165,7 +165,7 @@ void communication_first_and_fourth(int hobos_count, thread_redundant_data *orig
 		rcv_data[index].rank = index;
 		rcv_data[index].data_pointer = data_recv;
 		rcv_data[index].other_data = origin_data;
-		pthread_create(&receivers[index], NULL, receive, &rcv_data[index]);
+		// pthread_create(&receivers[index], NULL, receive, &rcv_data[index]);
 	}
 }
 /*This function will be executed by Hobos processes*/
@@ -190,7 +190,7 @@ int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int 
 	thread_redundant_data origin_data = {rank, &lamport, &my_comm};
 	
 	communication_first_and_fourth(hobos_count, &origin_data, message, &responses);
-	
+	sleep(100);
 	/*2nd phase of communication: collect requests from all except yourself*/
 	for(index = 0; index < hobos_count - 1; index++){
 		printf("ON: %d R%d\n", rank, index);
