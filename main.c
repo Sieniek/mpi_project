@@ -188,7 +188,7 @@ int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int 
 	message[0] = ACCESS_REQUEST;
 	message[1] = lamport;
 	thread_redundant_data origin_data = {rank, &lamport, &my_comm};
-
+	
 	communication_first_and_fourth(hobos_count, &origin_data, message, &responses);
 	
 	/*2nd phase of communication: collect requests from all except yourself*/
