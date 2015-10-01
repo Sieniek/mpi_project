@@ -149,7 +149,7 @@ int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int 
 	int responses = 0;
 	int hobo_index[hobos_count];
 	data request_table[hobos_count];
-
+	
 	thread_data snd_data[hobos_count];
 	thread_data rcv_data[hobos_count];
 
@@ -267,7 +267,6 @@ int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int 
 			MPI_Send(&message, 2, MPI_INT, hobos_count + index, 0, MPI_COMM_WORLD);
 	}
 	printf("ON: %d END!\n", rank);
-
 }
 
 /*Recv from all hobos its statuses, return max lamport of all messages*/
@@ -284,8 +283,6 @@ int collect_patients(int patients_count, nurse_data *patients_register){
 	}
 	return lamport;
 }
-
-void help_patients(){}
 
 /*This function is looking for patient for nurse,
 If all nurse are working in this way, they don't need to comunicate*/
@@ -311,20 +308,48 @@ int patient_to_help(int my_index, int hobos_count, nurse_data *patients_register
 	return -1;
 }
 
+int help_patients(int rank, int patient_to_help, int lamport){
+	int message[2] = {I_WILL_HELP_YOU, lamport};
+	/*Save this hobo!*/
+	MPI_Send(&message, 2, MPI_INT, patient_to_help, 0, MPI_COMM_WORLD);
+	printf("Nurse %d I wait for OK status from current hobo: %d\n", rank, patient_to_help);
+	/*Before you go further, wait for acknowlege!*/
+	MPI_Recv(&message, 2, MPI_INT, patient_to_help, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+	if(message[0] == I_AM_FINE){
+		printf("Nurse %d did help hobo with rank: %d\n", rank, patient_to_help);
+	}else{
+		exit(1);
+	}
+}
+/*Find and help all hobos you should help to
+Another possible name for this function: find_and_cure*/
+void nurse_job(int rank, int hobos_count, int nurse_count, nurse_data *patients, int lamport){
+	int offset = 0;
+	int my_index, hobo_to_cure;
+	int index = hobos_count;
+	while (index--) {
+		/*my index it's a relative index inside nurses group
+		WARNING: my index will have value in range: <1..nurse_count>*/
+		my_index = rank - hobos_count + 1 + offset * nurse_count;
+	
+		hobo_to_cure = patient_to_help(my_index, hobos_count, patients);
+
+		if (hobo_to_cure > -1) {
+			help_patients(rank, hobo_to_cure, lamport);
+			offset++;
+		}else{
+			/*if current my_index isn't good enough there's no sense to looking for another hobo*/
+			break;
+		}
+	}
+}
 /*This function will be executed by Nurses processes*/
 int nurse_live(int rank, int hobos_count, int nurse_count) {
 	int index = hobos_count;
-	int if_drunk[hobos_count];
-	int weights[hobos_count];
 	int offset = 0;
-	int recv_message[2] = {0, 0};
-	int send_message[2] = {0, 0};
-	MPI_Status status;
-
 	int lamport = 0;
-
 	nurse_data patients[hobos_count];
-		
+
 	lamport = collect_patients(hobos_count, patients);
 	printf("Nurse %d I get info from all\n", rank);
 	/*
@@ -333,28 +358,8 @@ int nurse_live(int rank, int hobos_count, int nurse_count) {
 	Because each nurse has the same data, nurses will be NOT communicate with each other.
 	Simply they send a message to specific hobo. This will be mean, this nurse is helping this hobo.
 	*/
-	index = hobos_count;
-	send_message[0] = I_WILL_HELP_YOU;
-	while (index--) {
-		/*my index it's a relative index inside nurses group
-		WARNING: my index will have value in range: <1..nurse_count>*/
-		int my_index = rank - hobos_count + 1 + offset * nurse_count;
-		int hobo_index = 0;
-		int hobo_to_send;
-		
-		hobo_to_send = patient_to_help(my_index, hobos_count, patients);
-		if (hobo_to_send > -1) {
-			printf("Nurse %d choosed hobo with rank: %d\n", rank, hobo_to_send);
-			/*Save this hobo!*/
-			MPI_Send(&send_message, 2, MPI_INT, hobo_to_send, 0, MPI_COMM_WORLD);
-
-			printf("Nurse %d I wait for OK status from current hobo: %d\n", rank, hobo_to_send);
-			/*Before you go further, wait for acknowlege!*/
-			MPI_Recv(&recv_message, 2, MPI_INT, hobo_to_send, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-			printf("Nurse %d did help hobo with rank: %d\n", rank, hobo_to_send);
-			offset++;
-		}
-	}
+	
+	nurse_job(rank, hobos_count, nurse_count, patients, lamport);
 	printf("Nurse: %d END\n", rank);
 }
 
