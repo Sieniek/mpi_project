@@ -100,7 +100,7 @@ void createRole(int rank, int* roles_count) {
 	} else if (rank < roles_count[HOBO_INDEX] + roles_count[NURSE_INDEX]) {
 		/*Nurse*/
 		// printf("I will be nurse in future. :| \n");
-		nurse_live(rank, roles_count[HOBO_INDEX], roles_count[NURSE_INDEX]);
+		nurse_live(rank, roles_count[HOBO_INDEX], roles_count[NURSE_INDEX], roles_count[LIMIT_INDEX]);
 	} else {
 		/*Useless processes*/
 		// printf("I have no future... ;( \n");
@@ -208,6 +208,18 @@ void serve_response(int responses, int rival_rank, MPI_Comm my_comm, int rank) {
 	}
 	MPI_Send(&message, 2, MPI_INT, rival_rank, 2, my_comm);
 }
+
+void wait_for_rescue(int weight, int* nurses_ids, int rank){
+	MPI_Status status;
+	int message[2];
+	while (weight--) {
+		MPI_Recv(&message, 2, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
+		printf("Hobo %d receive help from: %d\n", rank, status.MPI_SOURCE);
+		/*Save ids to responde*/
+		if (message[0] == I_WILL_HELP_YOU)
+			nurses_ids[weight] = status.MPI_SOURCE;
+	}
+}
 /*This function will be executed by Hobos processes*/
 int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int limit) {
 	int lamport = 0, index, drunk, weight;
@@ -235,7 +247,7 @@ int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int 
 	/*Just wait for get response*/
 	/*Empty body of this while makes bad things*/
 	while (responses == 0) {
-		printf("ON: %d WAITING!\n", rank);}
+		fflush(stdout);}
 
 	serve_response(responses, request_table[limit - 1].rank, my_comm, rank);
 
@@ -245,26 +257,35 @@ int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int 
 
 	if (responses == ACCESS_GRANTED) {
 		printf("ON: %d I am in!\n", rank);
-
 		/*Randomly get drunk*/
 		drunk = rand() % 2;
 		weight = rand() % 4 + 1;
-		index = nurse_count;
 		message[0] = drunk;
 		message[1] = weight;
-		while (index--)
-			MPI_Send(&message, 2, MPI_INT, hobos_count + index, 0, MPI_COMM_WORLD);
+	} else {
+		printf("ON: %d I am out!\n", rank);
+		message[0] = 0;
+		message[1] = 0;
+	}
+	index = nurse_count;
 
-		printf("ON: %d status: %d and weight: %d\n", rank, drunk, weight);
+	while (index--)
+		MPI_Send(&message, 2, MPI_INT, hobos_count + index, 0, MPI_COMM_WORLD);
 
-		while (drunk && weight--) {
+	printf("ON: %d status: %d and weight: %d\n", rank, drunk, weight);
+
+	if(drunk) {
+		// wait_for_rescue(weight, nurses_ids, rank);
+
+		while (weight--) {
 			MPI_Recv(&message, 2, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
 			printf("Hobo %d receive help from: %d\n", rank, status.MPI_SOURCE);
 			/*Save ids to responde*/
 			if (message[0] == I_WILL_HELP_YOU)
 				nurses_ids[weight] = status.MPI_SOURCE;
 		}
-
+	}
+	if(drunk){
 		printf("Hobo: %d Status: I get enough help. I need release my nurses\n", rank);
 		message[0] = I_AM_FINE;
 		while (drunk && weight != 4) {
@@ -273,13 +294,6 @@ int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int 
 			weight++;
 		}
 		printf("Hobo: %d Status: After 2nd critical section\n", rank);
-	} else {
-		printf("ON: %d I am out!\n", rank);
-		index = nurse_count;
-		message[0] = 0;
-		message[1] = 0;
-		while (index--)
-			MPI_Send(&message, 2, MPI_INT, hobos_count + index, 0, MPI_COMM_WORLD);
 	}
 	printf("ON: %d END!\n", rank);
 }
@@ -289,6 +303,8 @@ int collect_patients(int patients_count, nurse_data *patients_register) {
 	int lamport = 0;
 	MPI_Status status;
 	int recv_message[2] = {0, 0};
+
+		printf("GET INFO\t LIMIT: %d\n", patients_count);
 	while (patients_count--) {
 		MPI_Recv(&recv_message, 2, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
 		(patients_register + status.MPI_SOURCE)->if_drunk = recv_message[0];
@@ -359,12 +375,15 @@ void nurse_job(int rank, int hobos_count, int nurse_count, nurse_data *patients,
 	}
 }
 /*This function will be executed by Nurses processes*/
-int nurse_live(int rank, int hobos_count, int nurse_count) {
+int nurse_live(int rank, int hobos_count, int nurse_count, int limit) {
 	int index = hobos_count;
 	int offset = 0;
 	int lamport = 0;
 	nurse_data patients[hobos_count];
-
+	while(index--)
+		patients[index].if_drunk = 0;
+		patients[index].weight = 0;
+	
 	lamport = collect_patients(hobos_count, patients);
 	printf("Nurse %d I get info from all\n", rank);
 	/*
