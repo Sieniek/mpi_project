@@ -32,6 +32,7 @@ Lukasz Krawczyk 109***
 
 #define I_WILL_HELP_YOU 123
 #define I_AM_FINE 321
+#define REPEAT_COUNT 30
 
 struct data
 {
@@ -265,132 +266,114 @@ void wait_for_rescue(int weight, int* nurses_ids, int rank){
 	while (weight--) {
 		MPI_Recv(&message, 2, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
 		printf("Hobo %d receive help from: %d\n", rank, status.MPI_SOURCE);
-		/*Save ids to responde*/
+		/*Save ids to response*/
 		if (message[0] == I_WILL_HELP_YOU)
 			nurses_ids[weight] = status.MPI_SOURCE;
 	}
 }
 /*This function will be executed by Hobos processes*/
 int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int limit) {
-	int lamport = 0, index, drunk, weight;
-	int message[3] = {ACCESS_REQUEST, 0, 0};
-	int message2[3] = {ACCESS_REQUEST, 0, 0};
-	int message3[3] = {ACCESS_REQUEST, 0, 0};
-	int nurses_ids[4] = {0,0,0,0};
-	MPI_Status status;
-	/*All receivers should save the same value, so I don't need array, except this I will use single variable*/
-	int responses = 0;
-	data request_table[hobos_count];
-	thread_data example_data, snd_data[hobos_count], rcv_data[hobos_count];
+	int cycle_count = 0;
+	while(cycle_count++ < REPEAT_COUNT){
 
-	/*This threads will be sending access request*/
-	pthread_t senders[hobos_count];
-	/*This threads will be waiting for responses*/
-	pthread_t receivers[hobos_count];
+		int lamport = 0, index, drunk, weight;
+		int message[3] = {ACCESS_REQUEST, 0, 0};
+		int message2[3] = {ACCESS_REQUEST, 0, 0};
+		int message3[3] = {ACCESS_REQUEST, 0, 0};
+		int nurses_ids[4] = {0,0,0,0};
+		MPI_Status status;
+		/*All receivers should save the same value, so I don't need array, except this I will use single variable*/
+		int responses = 0;
+		data request_table[hobos_count];
+		thread_data example_data, snd_data[hobos_count], rcv_data[hobos_count];
 
-	example_data.communicator = my_comm;
-	example_data.author = rank;
-	message[0] = ACCESS_REQUEST;
-	message[1] = lamport;
+		/*This threads will be sending access request*/
+		pthread_t senders[hobos_count];
+		/*This threads will be waiting for responses*/
+		pthread_t receivers[hobos_count];
 
-	comm_1_4(hobos_count, example_data, message, &responses, snd_data, rcv_data, senders, receivers);
+		printf("=====================\n");
+		printf("========..%d..=======\n",cycle_count);
+		printf("=====================\n");
+		example_data.communicator = my_comm;
+		example_data.author = rank;
 
-	printf("ON: %d at %d 1\n", rank, lamport_value);
-	comm_2(hobos_count, request_table, my_comm);
+		comm_1_4(hobos_count, example_data, message, &responses, snd_data, rcv_data, senders, receivers);
 
-	printf("ON: %d at %d 2\n", rank, lamport_value);
-	qsort(request_table, hobos_count - 1, sizeof(data), comparator);
+		comm_2(hobos_count, request_table, my_comm);
 
-	printf("ON: %d at %d 3\n", rank, lamport_value);
-	comm_3(hobos_count, request_table, rank, limit, my_comm);
+		qsort(request_table, hobos_count - 1, sizeof(data), comparator);
 
-	/*Just wait for get response*/
-	/*Empty body of this while makes bad things*/
-	while (responses == 0) {
-		fflush(stdout);}
+		comm_3(hobos_count, request_table, rank, limit, my_comm);
 
-	serve_response(responses, request_table[limit - 1].rank, my_comm, rank);
+		/*Just wait for get response*/
+		/*Empty body of this while makes bad things*/
+		while (responses == 0) {
+			fflush(stdout);}
 
-	printf("ON: %d at %d After 1st critical section\n", rank, lamport_value);
+		serve_response(responses, request_table[limit - 1].rank, my_comm, rank);
 
-	// MPI_Barrier(my_comm);
+		printf("ON: %d at %d After 1st critical section\n", rank, lamport_value);
 
-	if (responses == ACCESS_GRANTED) {
-		printf("ON: %d I am in!\n", rank);
-		/*Randomly get drunk*/
-		drunk = rand() % 2;
-		weight = rand() % 4 + 1;
-		message2[0] = drunk;
-		message2[1] = weight;
-		printf("ON: %d status: %d and weight: %d\n", rank, drunk, weight);
-	} else {
-		printf("ON: %d I am out!\n", rank);
-		drunk = 0;
-		message2[0] = 0;
-		message2[1] = 0;
-	}
-	index = nurse_count;
-
-	while (index--){
-		message2[2] = get_lamport();
-
-		if(hobos_count + index >= 10)
-			printf("%s\n", "BADBAD123!!\n");
-		fflush(stdout);
-		MPI_Send(&message2, 3, MPI_INT, hobos_count + index, 0, MPI_COMM_WORLD);
-	}
-
-
-	if(drunk) {
-		// wait_for_rescue(weight, nurses_ids, rank);
-
-		while (weight--) {
-			MPI_Recv(&message2, 2, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
-			printf("Hobo %d receive help from: %d\n", rank, status.MPI_SOURCE);
-			/*Save ids to responde*/
-			if (message2[0] == I_WILL_HELP_YOU){
-				set_lamport(message2[1]);
-				nurses_ids[weight] = status.MPI_SOURCE;
-			}else{
-				exit(2);
-			}
+		if (responses == ACCESS_GRANTED) {
+			printf("ON: %d I am in!\n", rank);
+			/*Randomly get drunk*/
+			drunk = rand() % 2;
+			weight = rand() % 4 + 1;
+			message2[0] = drunk;
+			message2[1] = weight;
+			printf("ON: %d status: %d and weight: %d\n", rank, drunk, weight);
+		} else {
+			printf("ON: %d I am out!\n", rank);
+			drunk = 0;
+			message2[0] = 0;
+			message2[1] = 0;
 		}
-	}
-	weight = 0;
-	if(drunk){
-		printf("Hobo: %d Status: I get enough help. I need release my nurses\n", rank);
-		message2[0] = I_AM_FINE;
-		while (weight != 4) {
-			if (nurses_ids[weight]){
-				message2[1] = get_lamport();
-				
-				if(nurses_ids[weight] >= 10){
-					printf("ON %d is value %d \n", rank, nurses_ids[0]);
-					printf("ON %d is value %d \n", rank, nurses_ids[1]);
-					printf("ON %d is value %d \n", rank, nurses_ids[2]);
-					printf("ON %d is value %d \n", rank, nurses_ids[3]);
+		index = nurse_count;
 
-					printf("ON %d is value %d \n", rank, weight);
-					printf("ON %d is value %d \n", rank, nurses_ids[weight]);
+		while (index--){
+			message2[2] = get_lamport();
+			MPI_Send(&message2, 3, MPI_INT, hobos_count + index, 0, MPI_COMM_WORLD);
+		}
 
+
+		if(drunk) {
+			// wait_for_rescue(weight, nurses_ids, rank);
+
+			while (weight--) {
+				MPI_Recv(&message2, 2, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
+				printf("Hobo %d receive help from: %d\n", rank, status.MPI_SOURCE);
+				// Save ids to responde
+				if (message2[0] == I_WILL_HELP_YOU){
+					set_lamport(message2[1]);
+					nurses_ids[weight] = status.MPI_SOURCE;
+				}else{
+					exit(2);
 				}
-				fflush(stdout);
-				
-				MPI_Send(&message2, 2, MPI_INT, nurses_ids[weight], 0, MPI_COMM_WORLD);
-				printf("Hobo: %d releaed %d\n", rank, nurses_ids[weight]);
 			}
-			weight++;
+			weight = 0;
+			printf("Hobo: %d Status: I get enough help. I need release my nurses\n", rank);
+			message2[0] = I_AM_FINE;
+			while (weight != 4) {
+				if (nurses_ids[weight]){
+					message2[1] = get_lamport();
+					
+					MPI_Send(&message2, 2, MPI_INT, nurses_ids[weight], 0, MPI_COMM_WORLD);
+					printf("Hobo: %d releaed %d\n", rank, nurses_ids[weight]);
+				}
+				weight++;
+			}
+			printf("Hobo: %d Status: After 2nd critical section\n", rank);
 		}
-		printf("Hobo: %d Status: After 2nd critical section\n", rank);
-	}
 
-	printf("ON: %d wait for threads!\n", rank);
-	index = hobos_count;
-	while(index--){
-		if (index == example_data.author)
-			continue;
-		pthread_join(senders[index], NULL);
-		pthread_join(receivers[index], NULL);
+		printf("ON: %d wait for threads!\n", rank);
+		index = hobos_count;
+		while(index--){
+			if (index == example_data.author)
+				continue;
+			pthread_join(senders[index], NULL);
+			pthread_join(receivers[index], NULL);
+		}
 	}
 	printf("ON: %d END!\n", rank);
 }
@@ -434,6 +417,11 @@ int patient_to_help(int my_index, int hobos_count, nurse_data *patients_register
 	return -1;
 }
 
+/*
+Communication between specific hobo: patient and nurse
+Firstly nurse send message I_WILL_HELP_YOU to patient
+Then she needs to wait for his response I_AM_FINE
+*/
 int help_patients(int rank, int patient_to_help, int lamport) {
 	int message[2] = {I_WILL_HELP_YOU, get_lamport()};
 	/*Save this hobo!*/
@@ -472,26 +460,43 @@ void nurse_job(int rank, int hobos_count, int nurse_count, nurse_data *patients,
 		}
 	}
 }
+
+/* Here all variables used by nurse process will be set to default values*/
+void init_nurse_variables(int *offset, nurse_data *patients, int index){
+	(*offset) = 0;
+
+	while(index--){
+		patients[index].if_drunk = 0;
+		patients[index].weight = 0;
+	}
+}
 /*This function will be executed by Nurses processes*/
 int nurse_live(int rank, int hobos_count, int nurse_count, int limit) {
+	int cycle_count = 0;
 	int index = hobos_count;
 	int offset = 0;
 	int lamport = 0;
 	nurse_data patients[hobos_count];
-	while(index--)
-		patients[index].if_drunk = 0;
-		patients[index].weight = 0;
-	
-	lamport = collect_patients(hobos_count, patients);
-	printf("Nurse %d I get info from all\n", rank);
-	/*
-	Now nurse know all about each hobo: what is its weight or if he is drunk
-	So this is time to respond on help request: nurse needs to help hobo.
-	Because each nurse has the same data, nurses will be NOT communicate with each other.
-	Simply they send a message to specific hobo. This will be mean, this nurse is helping this hobo.
-	*/
 
-	nurse_job(rank, hobos_count, nurse_count, patients, lamport);
+	while(cycle_count++ < REPEAT_COUNT){
+
+		printf("=====================\n");
+		printf("NUR=====..%d..=======\n",cycle_count);
+		printf("=====================\n");
+
+		printf("Nurse %d I wait for info from all\n", rank);
+		init_nurse_variables(&offset, patients, hobos_count);
+		lamport = collect_patients(hobos_count, patients);
+		printf("Nurse %d I get info from all\n", rank);
+		/*
+		Now nurse know all about each hobo: what is its weight or if he is drunk
+		So this is time to respond on help request: nurse needs to help hobo.
+		Because each nurse has the same data, nurses will be NOT communicate with each other.
+		They simply send a message to specific hobo. This will be mean, this nurse is helping this hobo.
+		*/
+
+		nurse_job(rank, hobos_count, nurse_count, patients, lamport);
+	}
 	printf("Nurse: %d END\n", rank);
 }
 
