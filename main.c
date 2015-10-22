@@ -32,7 +32,7 @@ Lukasz Krawczyk 109***
 
 #define I_WILL_HELP_YOU 123
 #define I_AM_FINE 321
-#define REPEAT_COUNT 30
+#define REPEAT_COUNT 1
 
 struct data
 {
@@ -187,8 +187,6 @@ void comm_1_4(int hobos_count, thread_data example_data, int *message, int *resp
 	MPI_Status status;
 	/*All receivers should save the same value, so I don't need array, except this I will use single variable*/
 	int index;
-	int hobo_index[hobos_count];
-	data request_table[hobos_count];
 	get_lamport();
 
 	for (index = 0; index < hobos_count; index++) {
