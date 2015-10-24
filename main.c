@@ -251,31 +251,8 @@ int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int 
 
 		printf("ON: %d at %d After 1st critical section\n", rank, lamport_value);
 
-		// if (responses[out_index * 2] == ACCESS_GRANTED) {
-		// 	printf("ON: %d I am in!\n", rank);
-		// 	/*Randomly get drunk*/
-		// 	drunk = rand() % 2;
-		// 	weight = rand() % 4 + 1;
-		// 	message2[0] = drunk;
-		// 	message2[1] = weight;
-		// 	printf("ON: %d status: %d and weight: %d\n", rank, drunk, weight);
-		// } else {
-		// 	printf("ON: %d I am out!\n", rank);
-		// 	drunk = 0;
-		// 	message2[0] = 0;
-		// 	message2[1] = 0;
-		// }
-		// 	printf("Hobo: %d X0X: %d %d \n", rank, message2[0], message2[1]);
-		int stat = responses[out_index * 2];
-		party(rank, message2, stat);
-		index = nurse_count;
-
-			printf("Hobo: %d XXX: %d %d \n", rank, message2[0], message2[1]);
-		while (index--){
-			message2[2] = get_lamport();
-			MPI_Send(&message2, 3, MPI_INT, hobos_count + index, 0, MPI_COMM_WORLD);
-		}
-
+		party(rank, message2, responses[out_index * 2]);
+		send_status_to_nurses(hobos_count, nurse_count, message2);
 
 		if(message2[0]) {
 			get_nurses(message2[1], rank, nurses_ids);
@@ -287,7 +264,12 @@ int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int 
 	}
 	printf("ON: %d END!\n", rank);
 }
-
+int send_status_to_nurses(int hobos_count, int nurse_count, int *message){
+		while (nurse_count--){
+			message[2] = get_lamport();
+			MPI_Send(&message, 3, MPI_INT, hobos_count + nurse_count, 0, MPI_COMM_WORLD);
+		}
+}
 int party(int rank, int *message2, int status){
 	int drunk, weight;
 	if (status == ACCESS_GRANTED) {
