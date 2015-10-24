@@ -24,8 +24,6 @@ Lukasz Krawczyk 109***
 
 #define I_WILL_HELP_YOU 123
 #define I_AM_FINE 321
-#define REPEAT_COUNT 24
-
 
 #define DRUNK 0
 #define WEIGHT 1
@@ -37,6 +35,7 @@ struct basic_parameters{
 	int loop_limit;
 	int rank;
 	int lamport;
+	MPI_Comm my_comm;
 };
 
 struct data
@@ -96,7 +95,7 @@ basic_parameters* parseInputValues(int argc, char** argv) {
 		nurse_count = strtol(argv[2], (char **)NULL, 10);
 		hobo_limit = strtol(argv[3], (char **)NULL, 10);
 		loop_limit = strtol(argv[4], (char **)NULL, 10);
-		printf("Hobos: %d, Nurses: %d\n", hobos_count, nurse_count);
+		printf("Hobos: %d, Nurses: %d Limit: %d, Loops: %d\n", hobos_count, nurse_count, hobo_limit, loop_limit);
 	} else {
 		printf("No parameters set! Default parameters will be used: hobos=100 and nurse=10\n");
 		hobos_count = 6;
@@ -104,9 +103,6 @@ basic_parameters* parseInputValues(int argc, char** argv) {
 		hobo_limit = 3;
 		loop_limit = 10;
 	}
-	// returned_values[0] = hobos_count;
-	// returned_values[1] = nurse_count;
-	// returned_values[2] = hobo_limit;
 	returned_values.hobos_count = hobos_count;
 	returned_values.nurse_count = nurse_count;
 	returned_values.hobo_limit = hobo_limit;
@@ -119,79 +115,82 @@ void createRole(int rank, basic_parameters* parameters) {
 	MPI_Comm hobo_comm;
 	MPI_Comm_split(MPI_COMM_WORLD, rank < parameters->hobos_count, 0, &hobo_comm);
 
+	parameters->rank = rank;
+
 	if (rank < parameters->hobos_count) {
 		/*Hobo*/
-		hobo_live(rank, parameters->hobos_count, hobo_comm, parameters->nurse_count, parameters->hobo_limit);
+		parameters->my_comm = hobo_comm;
+		hobo_live(parameters);
 	} else if (rank < parameters->hobos_count + parameters->nurse_count) {
 		/*Nurse*/
-		nurse_live(rank, parameters->hobos_count, parameters->nurse_count, parameters->hobo_limit);
+		nurse_live(parameters);
 	} else {
 		/*Useless processes*/
 	}
 }
 
-void comm_1_4(int hobos_count, int rank, MPI_Comm my_comm, int *responses, MPI_Request *request_statuses) {
+void comm_1_4(basic_parameters *parameters, int *responses, MPI_Request *request_statuses) {
 	int message[3] = {ACCESS_REQUEST, 0, 0};
 	int index;
 	get_lamport();
 
 	MPI_Request request, request_recv;
-	for (index = 0; index < hobos_count; index++) {
-		if (index == rank){
+	for (index = 0; index < parameters->hobos_count; index++) {
+		if (index == parameters->rank){
 			request_statuses[index] = MPI_REQUEST_NULL;
 			continue;
 		}
-		MPI_Isend(message, 2, MPI_INT, index, 11, my_comm, &request);
-		MPI_Irecv(responses + index * 2, 2, MPI_INT, index, 2, my_comm, request_statuses + index);
+		MPI_Isend(message, 2, MPI_INT, index, 11, parameters->my_comm, &request);
+		MPI_Irecv(responses + index * 2, 2, MPI_INT, index, 2, parameters->my_comm, request_statuses + index);
 	}
 }
 
 /*2nd phase of communication: collect requests from all except yourself*/
-void comm_2(int hobos_count, data *request_table, MPI_Comm my_comm) {
+void comm_2(basic_parameters *parameters, data *request_table) {
 	MPI_Status status;
 	int index, get_message[2];
-	for (index = 0; index < hobos_count - 1; index++) {
-		MPI_Recv(get_message, 2, MPI_INT, MPI_ANY_SOURCE, 11, my_comm, &status);
+	for (index = 0; index < parameters->hobos_count - 1; index++) {
+		MPI_Recv(get_message, 2, MPI_INT, MPI_ANY_SOURCE, 11, parameters->my_comm, &status);
 		request_table[index].value = get_message[0];
 		request_table[index].time = get_message[1];
 		request_table[index].rank = status.MPI_SOURCE;
 	}
 	set_lamport(get_message[1]);
-	request_table[hobos_count -1].time = -1;
-	request_table[hobos_count -1].rank = -1;
-	request_table[hobos_count -1].value = -1;
+	request_table[parameters->hobos_count -1].time = -1;
+	request_table[parameters->hobos_count -1].rank = -1;
+	request_table[parameters->hobos_count -1].value = -1;
 }
 
 /*3rd phase of comunication: send responses*/
-void comm_3(int hobos_count, data* request_table, int rank, int limit, MPI_Comm my_comm) {
+void comm_3(basic_parameters *parameters, data *request_table) {
 	int index, message[2];
-	for (index = 0; index < hobos_count - 1; index++) {
-		if (index < limit - 1) {
+	for (index = 0; index < parameters->hobos_count - 1; index++) {
+		if (index < parameters->hobo_limit - 1) {
 			message[0] = ACCESS_GRANTED;
-			printf("ON: %d Grant access to %d LIMIT: %d\n", rank, request_table[index].rank, limit);
-		} else if (index >= limit) {
+			printf("ON: %d Grant access to %d LIMIT: %d\n", parameters->rank, request_table[index].rank, parameters->hobo_limit);
+		} else if (index >= parameters->hobo_limit) {
 			message[0] = ACCESS_DENIED;
-			printf("ON: %d Denied access to %d\n", rank, request_table[index].rank);
-		} else if (index == limit - 1) {
-			printf("ON: %d Ignored for now. If I enter I will send to this thread ACCESS Denied %d\n", rank, request_table[index].rank);
+			printf("ON: %d Denied access to %d\n", parameters->rank, request_table[index].rank);
+		} else if (index == parameters->hobo_limit - 1) {
+			printf("ON: %d Ignored for now. If I enter I will send to this thread ACCESS Denied %d\n", parameters->rank, request_table[index].rank);
 			continue;
 		}
 		message[1] = get_lamport();
-		MPI_Send(&message, 2, MPI_INT, request_table[index].rank, 2, my_comm);
+		MPI_Send(&message, 2, MPI_INT, request_table[index].rank, 2, parameters->my_comm);
 	}
 }
 
-void serve_response(int responses, int rival_rank, MPI_Comm my_comm, int rank) {
+void serve_response(basic_parameters *parameters, int responses, int rival_rank) {
 	int message[2];
 	if (responses == ACCESS_GRANTED) {
-		printf("ON: %d I will be in!\n", rank);
+		printf("ON: %d I will be in!\n", parameters->rank);
 		message[0] = ACCESS_DENIED;
 	} else {
-		printf("ON: %d I will be out!\n", rank);
+		printf("ON: %d I will be out!\n", parameters->rank);
 		message[0] = ACCESS_GRANTED;
 	}
 	message[1] = get_lamport();
-	MPI_Send(&message, 2, MPI_INT, rival_rank, 2, my_comm);
+	MPI_Send(&message, 2, MPI_INT, rival_rank, 2, parameters->my_comm);
 }
 
 void wait_for_rescue(int weight, int* nurses_ids, int rank){
@@ -206,25 +205,25 @@ void wait_for_rescue(int weight, int* nurses_ids, int rank){
 	}
 }
 
-int first_critical_section(int rank, MPI_Comm my_comm, int hobos_count, int limit, int *responses){
+int first_critical_section(basic_parameters *parameters, int *responses){
 	int out_index;
 	/*All receivers should save the same value, so I don't need array, except this I will use single variable*/
-	data request_table[hobos_count];
-	MPI_Request request_statuses[hobos_count];
+	data request_table[parameters->hobos_count];
+	MPI_Request request_statuses[parameters->hobos_count];
 
-	comm_1_4(hobos_count, rank, my_comm, responses, request_statuses);
+	comm_1_4(parameters, responses, request_statuses);
 
-	comm_2(hobos_count, request_table, my_comm);
+	comm_2(parameters, request_table);
 
-	qsort(request_table, hobos_count - 1, sizeof(data), comparator);
+	qsort(request_table, parameters->hobos_count - 1, sizeof(data), comparator);
 
-	comm_3(hobos_count, request_table, rank, limit, my_comm);
+	comm_3(parameters, request_table);
 
 	/*Just wait for any response*/
-	MPI_Waitany(hobos_count, request_statuses, &out_index, MPI_STATUS_IGNORE);
+	MPI_Waitany(parameters->hobos_count, request_statuses, &out_index, MPI_STATUS_IGNORE);
 	printf("Response from: %d", out_index);
 	
-	serve_response(responses[out_index * 2], request_table[limit - 1].rank, my_comm, rank);
+	serve_response(parameters, responses[out_index * 2], request_table[parameters->hobo_limit - 1].rank);
 
 	return out_index;
 }
@@ -286,27 +285,27 @@ int get_nurses(int weight, int rank, int *nurses_ids){
 }
 
 /*This function will be executed by Hobos processes*/
-int hobo_live(int rank, int hobos_count, MPI_Comm my_comm, int nurse_count, int limit) {
+int hobo_live(basic_parameters *parameters) {
 	int cycle_count = 0;
-	while(cycle_count++ < REPEAT_COUNT){
+	while(cycle_count++ < parameters->loop_limit){
 		int out_index;
 		int message[3] = {0, 0, 0};
-		int responses[hobos_count * 2];
+		int responses[parameters->hobos_count * 2];
 
 		printf("========..%d..=======\n",cycle_count);
 
-		out_index = first_critical_section(rank, my_comm, hobos_count, limit, responses);
+		out_index = first_critical_section(parameters, responses);
 
-		printf("ON: %d at %d After 1st critical section\n", rank, lamport_value);
+		printf("ON: %d at %d After 1st critical section\n", parameters->rank, lamport_value);
 
-		party(rank, message, responses[out_index * 2]);
+		party(parameters->rank, message, responses[out_index * 2]);
 
-		send_status_to_nurses(hobos_count, nurse_count, message);
+		send_status_to_nurses(parameters->hobos_count, parameters->nurse_count, message);
 
-		second_critical_section(rank, message);
+		second_critical_section(parameters->rank, message);
 		MPI_Barrier(MPI_COMM_WORLD);
 	}
-	printf("ON: %d END!\n", rank);
+	printf("ON: %d END!\n", parameters->rank);
 }
 
 /*Recv from all hobos its statuses, return max lamport of all messages*/
@@ -353,7 +352,7 @@ Communication between specific hobo: patient and nurse
 Firstly nurse send message I_WILL_HELP_YOU to patient
 Then she needs to wait for his response I_AM_FINE
 */
-int help_patients(int rank, int patient_to_help, int lamport) {
+int help_patients(int rank, int patient_to_help) {
 	int message[2] = {I_WILL_HELP_YOU, get_lamport()};
 	/*Save this hobo!*/
 	MPI_Send(&message, 2, MPI_INT, patient_to_help, 0, MPI_COMM_WORLD);
@@ -369,19 +368,19 @@ int help_patients(int rank, int patient_to_help, int lamport) {
 }
 /*Find and help all hobos you should help to
 Another possible name for this function: find_and_cure*/
-void nurse_job(int rank, int hobos_count, int nurse_count, nurse_data *patients, int lamport) {
+void nurse_job(basic_parameters *parameters, nurse_data *patients) {
 	int offset = 0;
 	int my_index, hobo_to_cure;
-	int index = hobos_count;
+	int index = parameters->hobos_count;
 	while (index--) {
 		/*my index it's a relative index inside nurses group
 		WARNING: my index will have value in range: <1..nurse_count>*/
-		my_index = rank - hobos_count + 1 + offset * nurse_count;
+		my_index = parameters->rank - parameters->hobos_count + 1 + offset * parameters->nurse_count;
 
-		hobo_to_cure = patient_to_help(my_index, hobos_count, patients);
+		hobo_to_cure = patient_to_help(my_index, parameters->hobos_count, patients);
 		
 		if (hobo_to_cure > -1) {
-			help_patients(rank, hobo_to_cure, lamport);
+			help_patients(parameters->rank, hobo_to_cure);
 			offset++;
 		} else {
 			/*if current my_index isn't good enough there's no sense to looking for another hobo*/
@@ -398,18 +397,18 @@ void init_nurse_variables(nurse_data *patients, int index){
 	}
 }
 /*This function will be executed by Nurses processes*/
-int nurse_live(int rank, int hobos_count, int nurse_count, int limit) {
+int nurse_live(basic_parameters *parameters) {
 	int cycle_count = 0;
 	int lamport = 0;
-	nurse_data patients[hobos_count];
+	nurse_data patients[parameters->hobos_count];
 
-	while(cycle_count++ < REPEAT_COUNT){
+	while(cycle_count++ < parameters->loop_limit){
 		printf("NUR=====..%d..=======\n",cycle_count);
 
-		printf("Nurse %d I wait for info from all\n", rank);
-		init_nurse_variables(patients, hobos_count);
-		lamport = collect_patients(hobos_count, patients);
-		printf("Nurse %d I get info from all\n", rank);
+		printf("Nurse %d I wait for info from all\n", parameters->rank);
+		init_nurse_variables(patients, parameters->hobos_count);
+		lamport = collect_patients(parameters->hobos_count, patients);
+		printf("Nurse %d I get info from all\n", parameters->rank);
 		/*
 		Now nurse know all about each hobo: what is its weight or if he is drunk
 		So this is time to respond on help request: nurse needs to help hobo.
@@ -417,11 +416,11 @@ int nurse_live(int rank, int hobos_count, int nurse_count, int limit) {
 		They simply send a message to specific hobo. This will be mean, this nurse is helping this hobo.
 		*/
 
-		nurse_job(rank, hobos_count, nurse_count, patients, lamport);
+		nurse_job(parameters, patients);
 
 		MPI_Barrier(MPI_COMM_WORLD);
 	}
-	printf("Nurse: %d END\n", rank);
+	printf("Nurse: %d END\n", parameters->rank);
 }
 
 int main(int argc, char **argv)
