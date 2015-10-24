@@ -45,6 +45,7 @@ struct data
 	int time;
 	int rank;
 	int value;
+	int in_count;
 };
 
 struct nurse_data
@@ -82,12 +83,19 @@ void set_lamport(int value){
 int comparator(const void *first, const void *second) {
 	data fdata = *(data*)first;
 	data sdata = *(data*)second;
-	if (fdata.time < 0){
+	if (fdata.time == -1){
 		return 1;
 	}
-	if (sdata.time < 0){
+	if (sdata.time == -1){
 		return -1;
 	}
+
+	if(fdata.in_count > sdata.in_count){
+		return 1;
+	}else{
+		return -1;
+	}
+
 	if (fdata.time == sdata.time)
 		return fdata.rank > sdata.rank ? 1 : -1;
 	return fdata.time > sdata.time ? 1 : -1;
@@ -147,9 +155,9 @@ void comm_1_4(basic_parameters *parameters, int *responses, MPI_Request *error_r
 	int lamport = get_lamport();
 	int error_message[2] = {0, 0};
 
-	if(0){
-		error_message[0] = NO_ACCESS_REQUEST;
-	}
+	// if(parameters->rank == 0){
+	// 	error_message[0] = NO_ACCESS_REQUEST;
+	// }
 
 	MPI_Request request, request_recv;
 	for (index = 0; index < parameters->hobos_count; index++) {
@@ -159,23 +167,25 @@ void comm_1_4(basic_parameters *parameters, int *responses, MPI_Request *error_r
 			continue;
 		}
 		message[1] = lamport;
+		// if(parameters->rank != 0)
 		MPI_Isend(message, 2, MPI_INT, index, 11, parameters->my_comm, &request);
-		MPI_Isend(message, 2, MPI_INT, index, 99, parameters->my_comm, error_request + index);
+		MPI_Isend(error_message, 2, MPI_INT, index, 99, parameters->my_comm, error_request + index);
 		// MPI_Irecv(responses + index * 2, 2, MPI_INT, index, 2, parameters->my_comm, request_statuses + index);
 	}
 
 	request_table[parameters->rank].time = lamport;
+	// if(parameters->rank == 0)
+	// request_table[parameters->rank].time = -1;
 	request_table[parameters->rank].rank = parameters->rank;
 	request_table[parameters->rank].value = ACCESS_REQUEST;
 }
 
 /*2nd phase of communication: collect requests from all except yourself*/
-void comm_2(basic_parameters *parameters, data *request_table) {
+void comm_2(basic_parameters *parameters, data *request_table, int *in_count) {
 	MPI_Status status;
 	int index = parameters->hobo_limit, get_message[2];
 	int error_message[2];
 	//wait for minimum requests
-	printf("wait for limit\n");
 	while (index--) {
 		MPI_Recv(get_message, 2, MPI_INT, MPI_ANY_SOURCE, 11, parameters->my_comm, &status);
 		request_table[status.MPI_SOURCE].value = get_message[0];
@@ -183,61 +193,25 @@ void comm_2(basic_parameters *parameters, data *request_table) {
 		request_table[status.MPI_SOURCE].rank = status.MPI_SOURCE;
 	}
 	//ask others
-	printf("On %d get info from %d processes. I will ask others...\n", parameters->rank, parameters->hobo_limit);
 	index = parameters->hobos_count;
 	while(index--){
-		if(request_table[index].time != -1)
+		request_table[index].in_count = in_count[index];
+		if(request_table[index].time != -1 || request_table[index].rank == parameters->rank)
 			continue;
 		
 		//ask aboit it's request
-		printf("On %d I will ask %d\n", parameters->rank, index);
 		MPI_Recv(error_message, 2, MPI_INT, index, 99, parameters->my_comm, MPI_STATUS_IGNORE);
 		if(error_message[0] == NO_ACCESS_REQUEST){
 			//Process doesn't send a request
 
-			printf("On %d Process %d didn't send q request\n", parameters->rank, index);
 		}else{ // else: process send a request, so I need to recv it
-			printf("On %d Process %d DID send q request, I will wait for it\n", parameters->rank, index);
 			MPI_Recv(get_message, 2, MPI_INT, index, 11, parameters->my_comm, &status);
 			request_table[status.MPI_SOURCE].value = get_message[0];
 			request_table[status.MPI_SOURCE].time = get_message[1];
 			request_table[status.MPI_SOURCE].rank = status.MPI_SOURCE;
-			printf("On %d Process %d DID send q request!\n", parameters->rank, index);
 		}
 	}
 	set_lamport(get_message[1]);
-}
-
-/*3rd phase of comunication: send responses*/
-void comm_3(basic_parameters *parameters, data *request_table) {
-	int index, message[2];
-	for (index = 0; index < parameters->hobos_count - 1; index++) {
-		if (index < parameters->hobo_limit - 1) {
-			message[0] = ACCESS_GRANTED;
-			printf("ON: %d Grant access to %d LIMIT: %d\n", parameters->rank, request_table[index].rank, parameters->hobo_limit);
-		} else if (index >= parameters->hobo_limit) {
-			message[0] = ACCESS_DENIED;
-			printf("ON: %d Denied access to %d\n", parameters->rank, request_table[index].rank);
-		} else if (index == parameters->hobo_limit - 1) {
-			printf("ON: %d Ignored for now. If I enter I will send to this thread ACCESS Denied %d\n", parameters->rank, request_table[index].rank);
-			continue;
-		}
-		message[1] = get_lamport();
-		MPI_Send(&message, 2, MPI_INT, request_table[index].rank, 2, parameters->my_comm);
-	}
-}
-
-void serve_response(basic_parameters *parameters, int responses, int rival_rank) {
-	int message[2];
-	if (responses == ACCESS_GRANTED) {
-		printf("ON: %d I will be in!\n", parameters->rank);
-		message[0] = ACCESS_DENIED;
-	} else {
-		printf("ON: %d I will be out!\n", parameters->rank);
-		message[0] = ACCESS_GRANTED;
-	}
-	message[1] = get_lamport();
-	MPI_Send(&message, 2, MPI_INT, rival_rank, 2, parameters->my_comm);
 }
 
 void wait_for_rescue(int weight, int* nurses_ids, int rank){
@@ -252,32 +226,23 @@ void wait_for_rescue(int weight, int* nurses_ids, int rank){
 	}
 }
 
-int first_critical_section(basic_parameters *parameters, int *responses){
-	int out_index;
+int first_critical_section(basic_parameters *parameters, int *responses, int *in_count){
+	int index;
 	/*All receivers should save the same value, so I don't need array, except this I will use single variable*/
 	data request_table[parameters->hobos_count];
 	MPI_Request request_statuses[parameters->hobos_count];
-	printf("First");
 	comm_1_4(parameters, responses, request_statuses, request_table);
-	printf("second__section\n");
-	comm_2(parameters, request_table);
-	printf("after 2nd\n");
-	qsort(request_table, parameters->hobos_count - 1, sizeof(data), comparator);
-
-	out_index = parameters->hobos_count;
-	// while(out_index-- && parameters->rank==3){
-	// 	printf(">>>>> INDEX: %d TIME: %d RANK:%d\n", out_index, request_table[out_index].time, request_table[out_index].rank );
-	// }
-	// sleep(100);
-	//comm_3(parameters, request_table);
+	comm_2(parameters, request_table, in_count);
+	qsort(request_table, parameters->hobos_count
+		, sizeof(data), comparator);
+	
 	int i_will_go = ACCESS_DENIED;
-	while(out_index--){
-
-		// if(request_statuses[out_index] != MPI_REQUEST_NULL){
-		// 	MPI_Cancel(request_statuses + out_index);
-		// }
-		if (request_table[out_index].rank == parameters->rank){
-			if( out_index < parameters->hobo_limit){
+	for(index = 0; index < parameters->hobo_limit; index++){
+		in_count[request_table[index].rank]++;
+	}
+	for(index = 0; index < parameters->hobos_count; index++){
+		if (request_table[index].rank == parameters->rank){
+			if( index < parameters->hobo_limit){
 				i_will_go = ACCESS_GRANTED;
 				printf("ON: %d I will be in!\n", parameters->rank);
 			}else{
@@ -286,13 +251,6 @@ int first_critical_section(basic_parameters *parameters, int *responses){
 			break;
 		}
 	}
-	/*Just wait for any response*/
-	//MPI_Waitany(parameters->hobos_count, request_statuses, &out_index, MPI_STATUS_IGNORE);
-	//printf("Response from: %d", out_index);
-	
-	//serve_response(parameters, responses[out_index * 2], request_table[parameters->hobo_limit - 1].rank);
-
-
 	return i_will_go;
 }
 
@@ -354,7 +312,13 @@ int get_nurses(int weight, int rank, int *nurses_ids){
 
 /*This function will be executed by Hobos processes*/
 int hobo_live(basic_parameters *parameters) {
-	int cycle_count = 0;
+	int cycle_count = parameters->hobos_count;
+	int in_count[parameters->hobos_count];
+
+	while(cycle_count){
+		in_count[--cycle_count] = 0;
+	}
+
 	while(cycle_count++ < parameters->loop_limit){
 		int out_index, i_will_go;
 		int message[3] = {0, 0, 0};
@@ -362,7 +326,7 @@ int hobo_live(basic_parameters *parameters) {
 
 		printf("========..%d..=======\n",cycle_count);
 
-		i_will_go = first_critical_section(parameters, responses);
+		i_will_go = first_critical_section(parameters, responses, in_count);
 
 		printf("ON: %d at %d After 1st critical section\n", parameters->rank, lamport_value);
 
@@ -373,7 +337,16 @@ int hobo_live(basic_parameters *parameters) {
 		second_critical_section(parameters->rank, message);
 		MPI_Barrier(MPI_COMM_WORLD);
 	}
-	printf("ON: %d END!\n", parameters->rank);
+	int sum = 0;
+	int c3ycle_count = parameters->hobos_count;
+	while(c3ycle_count--)
+		sum += in_count[c3ycle_count];
+	printf("ON: %d END! IN: %d ALL: %d\n", parameters->rank, in_count[parameters->rank], sum);
+	if(parameters->rank == 0){
+		c3ycle_count = parameters->hobos_count;
+		while(c3ycle_count--)
+			printf("$$$ the: %d === %d\n", c3ycle_count, in_count[c3ycle_count]);
+	}
 }
 
 /*Recv from all hobos its statuses, return max lamport of all messages*/
