@@ -20,6 +20,8 @@ Lukasz Krawczyk 109***
 #define ACCESS_DENIED 1
 #define ACCESS_REQUEST 9
 
+#define NO_ACCESS_REQUEST 1415
+
 #define PROBABILITY 0.5
 
 #define I_WILL_HELP_YOU 123
@@ -80,6 +82,12 @@ void set_lamport(int value){
 int comparator(const void *first, const void *second) {
 	data fdata = *(data*)first;
 	data sdata = *(data*)second;
+	if (fdata.time < 0){
+		return 1;
+	}
+	if (sdata.time < 0){
+		return -1;
+	}
 	if (fdata.time == sdata.time)
 		return fdata.rank > sdata.rank ? 1 : -1;
 	return fdata.time > sdata.time ? 1 : -1;
@@ -120,45 +128,84 @@ void createRole(int rank, basic_parameters* parameters) {
 	if (rank < parameters->hobos_count) {
 		/*Hobo*/
 		parameters->my_comm = hobo_comm;
+		printf("HOBO id %d!!!\n", parameters->rank);
 		hobo_live(parameters);
 	} else if (rank < parameters->hobos_count + parameters->nurse_count) {
 		/*Nurse*/
+
+		printf("NURSE id %d!!!\n", parameters->rank);
 		nurse_live(parameters);
 	} else {
 		/*Useless processes*/
+		printf("Process ENDED!!!\n");
 	}
 }
 
-void comm_1_4(basic_parameters *parameters, int *responses, MPI_Request *request_statuses) {
+void comm_1_4(basic_parameters *parameters, int *responses, MPI_Request *error_request, data *request_table) {
 	int message[3] = {ACCESS_REQUEST, 0, 0};
 	int index;
-	get_lamport();
+	int lamport = get_lamport();
+	int error_message[2] = {0, 0};
+
+	if(0){
+		error_message[0] = NO_ACCESS_REQUEST;
+	}
 
 	MPI_Request request, request_recv;
 	for (index = 0; index < parameters->hobos_count; index++) {
+		request_table[index].time = -1;
 		if (index == parameters->rank){
-			request_statuses[index] = MPI_REQUEST_NULL;
+			error_request[index] = MPI_REQUEST_NULL;
 			continue;
 		}
+		message[1] = lamport;
 		MPI_Isend(message, 2, MPI_INT, index, 11, parameters->my_comm, &request);
-		MPI_Irecv(responses + index * 2, 2, MPI_INT, index, 2, parameters->my_comm, request_statuses + index);
+		MPI_Isend(message, 2, MPI_INT, index, 99, parameters->my_comm, error_request + index);
+		// MPI_Irecv(responses + index * 2, 2, MPI_INT, index, 2, parameters->my_comm, request_statuses + index);
 	}
+
+	request_table[parameters->rank].time = lamport;
+	request_table[parameters->rank].rank = parameters->rank;
+	request_table[parameters->rank].value = ACCESS_REQUEST;
 }
 
 /*2nd phase of communication: collect requests from all except yourself*/
 void comm_2(basic_parameters *parameters, data *request_table) {
 	MPI_Status status;
-	int index, get_message[2];
-	for (index = 0; index < parameters->hobos_count - 1; index++) {
+	int index = parameters->hobo_limit, get_message[2];
+	int error_message[2];
+	//wait for minimum requests
+	printf("wait for limit\n");
+	while (index--) {
 		MPI_Recv(get_message, 2, MPI_INT, MPI_ANY_SOURCE, 11, parameters->my_comm, &status);
-		request_table[index].value = get_message[0];
-		request_table[index].time = get_message[1];
-		request_table[index].rank = status.MPI_SOURCE;
+		request_table[status.MPI_SOURCE].value = get_message[0];
+		request_table[status.MPI_SOURCE].time = get_message[1];
+		request_table[status.MPI_SOURCE].rank = status.MPI_SOURCE;
+	}
+	//ask others
+	printf("On %d get info from %d processes. I will ask others...\n", parameters->rank, parameters->hobo_limit);
+	index = parameters->hobos_count;
+	while(index--){
+		if(request_table[index].time != -1)
+			continue;
+		
+		//ask aboit it's request
+		printf("On %d I will ask %d\n", parameters->rank, index);
+		MPI_Recv(error_message, 2, MPI_INT, index, 99, parameters->my_comm, MPI_STATUS_IGNORE);
+		if(error_message[0] == NO_ACCESS_REQUEST){
+			//Process doesn't send a request
+
+			printf("On %d Process %d didn't send q request\n", parameters->rank, index);
+		}else{ // else: process send a request, so I need to recv it
+			printf("On %d Process %d DID send q request, I will wait for it\n", parameters->rank, index);
+			MPI_Recv(get_message, 2, MPI_INT, index, 11, parameters->my_comm, &status);
+			request_table[status.MPI_SOURCE].value = get_message[0];
+			request_table[status.MPI_SOURCE].time = get_message[1];
+			request_table[status.MPI_SOURCE].rank = status.MPI_SOURCE;
+			printf("On %d Process %d DID send q request!\n", parameters->rank, index);
+		}
 	}
 	set_lamport(get_message[1]);
-	request_table[parameters->hobos_count -1].time = -1;
-	request_table[parameters->hobos_count -1].rank = -1;
-	request_table[parameters->hobos_count -1].value = -1;
 }
 
 /*3rd phase of comunication: send responses*/
@@ -210,22 +257,43 @@ int first_critical_section(basic_parameters *parameters, int *responses){
 	/*All receivers should save the same value, so I don't need array, except this I will use single variable*/
 	data request_table[parameters->hobos_count];
 	MPI_Request request_statuses[parameters->hobos_count];
-
-	comm_1_4(parameters, responses, request_statuses);
-
+	printf("First");
+	comm_1_4(parameters, responses, request_statuses, request_table);
+	printf("second__section\n");
 	comm_2(parameters, request_table);
-
+	printf("after 2nd\n");
 	qsort(request_table, parameters->hobos_count - 1, sizeof(data), comparator);
 
-	comm_3(parameters, request_table);
+	out_index = parameters->hobos_count;
+	// while(out_index-- && parameters->rank==3){
+	// 	printf(">>>>> INDEX: %d TIME: %d RANK:%d\n", out_index, request_table[out_index].time, request_table[out_index].rank );
+	// }
+	// sleep(100);
+	//comm_3(parameters, request_table);
+	int i_will_go = ACCESS_DENIED;
+	while(out_index--){
 
+		// if(request_statuses[out_index] != MPI_REQUEST_NULL){
+		// 	MPI_Cancel(request_statuses + out_index);
+		// }
+		if (request_table[out_index].rank == parameters->rank){
+			if( out_index < parameters->hobo_limit){
+				i_will_go = ACCESS_GRANTED;
+				printf("ON: %d I will be in!\n", parameters->rank);
+			}else{
+				printf("ON: %d I will be out!\n", parameters->rank);
+			}
+			break;
+		}
+	}
 	/*Just wait for any response*/
-	MPI_Waitany(parameters->hobos_count, request_statuses, &out_index, MPI_STATUS_IGNORE);
-	printf("Response from: %d", out_index);
+	//MPI_Waitany(parameters->hobos_count, request_statuses, &out_index, MPI_STATUS_IGNORE);
+	//printf("Response from: %d", out_index);
 	
-	serve_response(parameters, responses[out_index * 2], request_table[parameters->hobo_limit - 1].rank);
+	//serve_response(parameters, responses[out_index * 2], request_table[parameters->hobo_limit - 1].rank);
 
-	return out_index;
+
+	return i_will_go;
 }
 
 int second_critical_section(int rank, int *message){
@@ -241,7 +309,7 @@ int second_critical_section(int rank, int *message){
 int send_status_to_nurses(int hobos_count, int nurse_count, int *message){
 	while (nurse_count--){
 		message[2] = get_lamport();
-		MPI_Send(message, 3, MPI_INT, hobos_count + nurse_count, 0, MPI_COMM_WORLD);
+		MPI_Send(message, 3, MPI_INT, hobos_count + nurse_count, 133, MPI_COMM_WORLD);
 	}
 }
 int party(int rank, int *message, int status){
@@ -288,17 +356,17 @@ int get_nurses(int weight, int rank, int *nurses_ids){
 int hobo_live(basic_parameters *parameters) {
 	int cycle_count = 0;
 	while(cycle_count++ < parameters->loop_limit){
-		int out_index;
+		int out_index, i_will_go;
 		int message[3] = {0, 0, 0};
 		int responses[parameters->hobos_count * 2];
 
 		printf("========..%d..=======\n",cycle_count);
 
-		out_index = first_critical_section(parameters, responses);
+		i_will_go = first_critical_section(parameters, responses);
 
 		printf("ON: %d at %d After 1st critical section\n", parameters->rank, lamport_value);
 
-		party(parameters->rank, message, responses[out_index * 2]);
+		party(parameters->rank, message, i_will_go);
 
 		send_status_to_nurses(parameters->hobos_count, parameters->nurse_count, message);
 
@@ -314,7 +382,7 @@ int collect_patients(int patients_count, nurse_data *patients_register) {
 	MPI_Status status;
 	int recv_message[2] = {0, 0};
 	while (patients_count--) {
-		MPI_Recv(&recv_message, 3, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
+		MPI_Recv(&recv_message, 3, MPI_INT, MPI_ANY_SOURCE, 133, MPI_COMM_WORLD, &status);
 		(patients_register + status.MPI_SOURCE)->if_drunk = recv_message[0];
 		(patients_register + status.MPI_SOURCE)->weight = recv_message[1];
 	
